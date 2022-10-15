@@ -1,0 +1,95 @@
+---
+title: "DJChart"
+output: html_document
+date: "2022-10-13"
+---
+
+```{r setup, include=FALSE, echo = FALSE}
+library(dplyr)
+library(scales)
+library(formattable)
+library(reactable)
+library(ggplot2)
+```
+
+## Setup the dataframes needed for the notebook.
+
+```{r, echo = FALSE}
+players <- read.csv("nfl-big-data-bowl-2023/players.csv")
+games <- read.csv("nfl-big-data-bowl-2023/games.csv")
+plays <- read.csv("nfl-big-data-bowl-2023/plays.csv")
+pffData <- read.csv("nfl-big-data-bowl-2023/pffScoutingData.csv")
+week1 <- read.csv("nfl-big-data-bowl-2023/week1.csv")
+pffData <- merge(pffData, plays,by=c("gameId","playId"))  %>%
+  rename(
+    team = possessionTeam
+  )
+```
+
+## Create a table of percentages to calculate how often a player that was pass blocking was beaten by a defender or allowed a hit/hurry/sack
+
+```{r, echo = FALSE}
+seasonBlockingData <- pffData %>%
+  inner_join(players, by="nflId") %>%
+  group_by(nflId, team, pff_positionLinedUp) %>%
+  filter(pff_role == "Pass Block") %>%
+  filter(pff_positionLinedUp %in% c('LT', 'LG', 'C', 'RG', 'RT')) %>%
+  mutate(
+    GP = n_distinct(gameId),
+    totalSnaps = n(),
+    pff_beatenByDefender = as.double(format(round((sum(pff_beatenByDefender)/n())*100,2), nsmall = 2)),
+    pff_hitAllowed = as.double(format(round((sum(pff_hitAllowed)/n())*100,2), nsmall = 2)),
+    pff_hurryAllowed = as.double(format(round((sum(pff_hurryAllowed)/n())*100,2), nsmall = 2)),
+    pff_sackAllowed = as.double(format(round((sum(pff_sackAllowed)/n())*100,2), nsmall = 2))
+  ) %>%
+  ungroup(nflId)%>%
+  select(
+    c(
+      'displayName',
+      'team',
+      'GP',
+      'totalSnaps',
+      'pff_positionLinedUp',
+      'pff_beatenByDefender',
+      'pff_hitAllowed',
+      'pff_hurryAllowed',
+      'pff_sackAllowed'
+    )
+  ) %>%
+  unique()
+reactable(seasonBlockingData)
+```
+```{r, echo = FALSE}
+#team summary
+team_summary <- seasonBlockingData %>%
+  group_by(team, pff_positionLinedUp) %>%
+  summarise(weighted_pos_av = (sum(totalSnaps*pff_beatenByDefender))/sum(totalSnaps)) %>%
+  mutate(pos = factor(pff_positionLinedUp, levels = c("LT", "LG", "C", "RG", "RT"))) %>%
+  group_by(team) %>%
+  mutate(team_av = mean(weighted_pos_av)) %>%
+  arrange(team_av) %>%
+  ungroup() %>%
+  mutate(team = factor(team, levels = unique(team)))
+
+#plot
+midpoint <- mean(team_summary$weighted_pos_av)
+
+
+ggplot(team_summary, aes(x = pos, y = 1, fill = weighted_pos_av)) +
+  geom_point(shape = 21, col = "black", size = 5) +
+  facet_wrap(.~ team, nrow = 4) +
+  theme_bw() +
+  theme(panel.grid = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold"),
+        legend.position = "bottom") +
+  labs(x = NULL, y = NULL, fill = "% beaten by defender") +
+  guides(fill = guide_colorbar(title.position="top", title.hjust = .5)) +
+  scale_fill_gradient2(low = "springgreen4", high = "red", mid = "grey90", midpoint = midpoint)
+
+```
+## 
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
