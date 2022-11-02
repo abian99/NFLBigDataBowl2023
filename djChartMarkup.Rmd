@@ -8,22 +8,36 @@ date: "2022-10-13"
 library(dplyr)
 library(scales)
 library(formattable)
+library(tidyverse)
+library(data.table)
+library(knitr)
 library(reactable)
-library(ggplot2)
+library(nflfastR)
+library(ggrepel)
 ```
 
 ## Setup the dataframes needed for the notebook.
 
 ```{r, echo = FALSE}
-players <- read.csv("nfl-big-data-bowl-2023/players.csv")
-games <- read.csv("nfl-big-data-bowl-2023/games.csv")
-plays <- read.csv("nfl-big-data-bowl-2023/plays.csv")
-pffData <- read.csv("nfl-big-data-bowl-2023/pffScoutingData.csv")
-week1 <- read.csv("nfl-big-data-bowl-2023/week1.csv")
-pffData <- merge(pffData, plays,by=c("gameId","playId"))  %>%
-  rename(
-    team = possessionTeam
-  )
+nflreadr::.clear_cache()
+players <- fread("nfl-big-data-bowl-2023/players.csv")
+games <- fread("nfl-big-data-bowl-2023/games.csv")
+plays <- fread("nfl-big-data-bowl-2023/plays.csv")
+pffData <- fread("nfl-big-data-bowl-2023/pffScoutingData.csv")
+week1 <- fread("nfl-big-data-bowl-2023/week1.csv")
+week2 <- fread("nfl-big-data-bowl-2023/week2.csv")
+week3 <- fread("nfl-big-data-bowl-2023/week3.csv")
+week4 <- fread("nfl-big-data-bowl-2023/week4.csv")
+week5 <- fread("nfl-big-data-bowl-2023/week5.csv")
+week6 <- fread("nfl-big-data-bowl-2023/week6.csv")
+week7 <- fread("nfl-big-data-bowl-2023/week7.csv")
+week8 <- fread("nfl-big-data-bowl-2023/week8.csv")
+
+pffData <- merge(pffData, plays, by = c("gameId", "playId"))  %>%
+  rename(team = possessionTeam)
+
+allWeeks <-
+  rbind(week1, week2, week3, week4, week5, week6, week7, week8)
 ```
 
 ## Create a table of percentages to calculate how often a player that was pass blocking was beaten by a defender or allowed a hit/hurry/sack
@@ -89,6 +103,109 @@ ggplot(team_summary, aes(x = pos, y = 1, fill = weighted_pos_av)) +
   guides(fill = guide_colorbar(title.position="top", title.hjust = .5)) +
   scale_fill_gradient2(low = "springgreen4", high = "red", mid = "grey90", midpoint = midpoint)
 
+```
+```{r, echo = FALSE}
+AutoPass <-
+  filter(allWeeks, event %in% c("autoevent_passforward", "qb_sack", "qb_strip_sack")) %>%
+  select('playId', 'gameId',  'team', 'event', 'frameId') %>%
+  unique()
+
+PassesForward <- filter(allWeeks, event == "pass_forward") %>%
+  select('playId', 'gameId', 'team', 'event', 'frameId') %>%
+  unique()
+
+PassesForward <-  rbind(PassesForward, anti_join(AutoPass, PassesForward, c('playId', 'gameId')))
+
+Snaps <- filter(allWeeks, event == "ball_snap") %>%
+  select('playId', 'gameId',  'team', 'frameId') %>%
+  rename(snap_frame = frameId) %>%
+  unique()
+
+OffensiveTeams <- plays %>%
+  select('playId', 'gameId','possessionTeam') %>%
+  rename(
+    team = possessionTeam
+  )
+
+DefensiveTeams <- plays %>%
+  select('playId', 'gameId','defensiveTeam') %>%
+  rename(
+    team = defensiveTeam
+  )
+
+Passes <- PassesForward %>%
+  inner_join(OffensiveTeams, by = c('playId', 'gameId','team')) %>%
+  inner_join(Snaps, by = c("playId", 'gameId', 'team')) %>%
+  group_by(team) %>%
+  mutate(total_snaps = n()) %>%
+  mutate(time_in_pocket = frameId - snap_frame) %>%
+  mutate(avgTimePerPass = as.numeric(format(mean(time_in_pocket), digits = 4))) %>%
+  select(c('team',
+           'avgTimePerPass',)) %>%
+  unique()
+
+average <- mean(Passes$avgTimePerPass)
+
+p <- ggplot(Passes, aes(team, avgTimePerPass)) +
+  geom_bar(stat="identity", width = 0.5) +
+  geom_hline(yintercept = average, color="red", lty='dashed', lwd=1) +
+  geom_text(aes(label = avgTimePerPass), size = 4, vjust = -0.5,
+            position = position_dodge(0.9)) +
+  coord_cartesian(ylim=c(25, 35)) 
+ggsave(p, file = "passing.png", width = 28, height=5)
+include_graphics("passing.png")
+```
+###
+```{r, echo = FALSE}
+Rushes <- PassesForward %>%
+  inner_join(DefensiveTeams, by = c('playId', 'gameId','team')) %>%
+  inner_join(Snaps, by = c("playId", 'gameId', 'team')) %>%
+  group_by(team) %>%
+  mutate(total_snaps = n()) %>%
+  mutate(time_in_pocket = frameId - snap_frame) %>%
+  mutate(avgTimePerPass = as.numeric(format(mean(time_in_pocket), digits = 4))) %>%
+  select(c('team',
+           'avgTimePerPass',)) %>%
+  unique()
+
+p <- ggplot(Rushes, aes(team, avgTimePerPass)) +
+  geom_bar(stat="identity", width = 0.5) +
+  geom_hline(yintercept = average, color="red", lty='dashed', lwd=1) +
+  geom_text(aes(label = avgTimePerPass), size = 4, vjust = -0.5,
+            position = position_dodge(0.9)) +
+  coord_cartesian(ylim=c(25, 35))
+
+ggsave(p, file = "rushing.png", width = 28, height=5)
+include_graphics("rushing.png")
+```
+
+###
+```{r, echo = FALSE}
+qb_list <- fast_scraper_roster(2021) %>%
+  filter(position=="QB")
+games_2021 <- nflfastR::load_pbp(2021) %>% 
+  filter(season_type == "REG") %>%
+  filter(week < 9)
+qb_runs <- games_2021%>%
+   filter(rusher_player_id %in% qb_list$gsis_id) %>%
+  filter(rushing_yards != "NA") %>%
+  group_by(posteam) %>%
+  summarize(totalRushingYards = sum(rushing_yards)) %>%
+  arrange(-totalRushingYards) %>%
+  unique()
+Passes <- Passes %>%
+  inner_join(qb_runs, by = c("team" = "posteam"))
+Passes %>%
+  ggplot(aes(x=avgTimePerPass, y=totalRushingYards, label=team)) +
+  geom_point() +
+  geom_label_repel( min.segment.length = 0,
+                    max.overlaps = Inf,
+                    label.size = 0,
+                    label.padding = 0,
+                    label.r = 0,
+                    size = 4,
+                    family="Monstercat") +
+  geom_smooth(method=lm, se=FALSE, col='red', linetype='dashed')
 ```
 ## 
 
